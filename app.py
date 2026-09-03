@@ -52,7 +52,6 @@ CHANNEL_USERNAME = os.environ.get("CHANNEL_USERNAME", "@Gheymat_Moment")
 CURRENCY_API_URL = "https://tgju.amirhossein.info/api/price/currency"
 NAVASAN_API_KEY = os.environ.get("NAVASAN_API_KEY", "")
 NAVASAN_API_URL = "http://api.navasan.tech/latest/"
-NOBITEX_STATS_URL = "https://api.nobitex.ir/market/stats"
 
 HEADERS = {
     "User-Agent": (
@@ -177,24 +176,19 @@ def get_gold_coin_from_navasan() -> dict:
         return {}
 
 
-def get_tether_toman() -> str | None:
+def get_tether_from_navasan(navasan_data: dict) -> str | None:
     """
-    قیمت تتر به تومان را از API رسمی و رایگان صرافی نوبیتکس می‌گیرد
-    (بدون نیاز به کلید). خروجی: متن قیمت به تومان، یا None در صورت خطا.
+    قیمت تتر را از همان داده‌ی Navasan که برای طلا/سکه گرفته‌ایم استخراج می‌کند.
+    (نوبیتکس را کنار گذاشتیم چون از سرورهای خارج ایران—مثل Render—اصلاً در
+    دسترس نیست و همیشه با خطای DNS مواجه می‌شود.)
+    چند نام‌ کد احتمالی را امتحان می‌کنیم چون مستندات Navasan نام دقیق کد
+    تتر را اعلام نکرده.
     """
-    try:
-        resp = requests.post(
-            NOBITEX_STATS_URL,
-            json={"srcCurrency": "usdt", "dstCurrency": "rls"},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        rial_price = data["stats"]["usdt-rls"]["latest"]
-        return to_toman(rial_price) if SHOW_IN_TOMAN else format_toman(rial_price)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("خطا در دریافت قیمت تتر از نوبیتکس: %s", exc)
-        return None
+    for candidate in ("usdt", "tether", "usdt_sell", "usdt_buy", "crypto_usdt"):
+        raw = navasan_data.get(candidate)
+        if raw:
+            return format_toman(raw)
+    return None
 
 
 def get_iran_datetime_str() -> str:
@@ -231,7 +225,7 @@ def build_message() -> str:
         price = to_toman(raw_price) if (raw_price and SHOW_IN_TOMAN) else (raw_price or "یافت نشد")
         lines.append(quote(f"{emoji} {label}: {price} {unit}"))
 
-    tether_toman = get_tether_toman()
+    tether_toman = get_tether_from_navasan(navasan_data)
     if tether_toman:
         lines.append(quote(f"💲 تتر (Tether): {tether_toman} {unit}"))
     else:
@@ -367,14 +361,14 @@ def debug():
             "ok": bool(navasan_data),
             "item_count": len(navasan_data),
         }
+        # کدهای موجود که شامل usd/tether/usdt هستند، برای پیدا کردن نام دقیق کد تتر
+        result["navasan_usdt_like_keys"] = [
+            k for k in navasan_data.keys() if "usd" in k.lower() or "tether" in k.lower()
+        ]
+        tether = get_tether_from_navasan(navasan_data)
+        result["tether"] = {"ok": bool(tether), "value": tether}
     except Exception as exc:  # noqa: BLE001
         result["navasan"] = {"error": str(exc)}
-
-    try:
-        tether = get_tether_toman()
-        result["nobitex_tether"] = {"ok": bool(tether), "value": tether}
-    except Exception as exc:  # noqa: BLE001
-        result["nobitex_tether"] = {"error": str(exc)}
 
     return jsonify(result)
 
