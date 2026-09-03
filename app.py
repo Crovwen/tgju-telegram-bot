@@ -44,14 +44,16 @@ SHOW_IN_TOMAN = os.environ.get("SHOW_IN_TOMAN", "true").strip().lower() != "fals
 CHANNEL_USERNAME = os.environ.get("CHANNEL_USERNAME", "@Gheymat_Moment")
 
 # منابع داده — هر بخش از معتبرترین منبعی که برایش پیدا شد:
-# ۱) ارزها: API شخص‌ثالث پایدار (BlackIQ/tgju-api) که مشکل مسدودسازی ربات‌ها
-#    روی tgju.org را حل کرده.
-# ۲) طلا/سکه: Navasan (navasan.tech) — سرویس شناخته‌شده‌ی ایرانی، مستقل از tgju.
-#    نیاز به یک API KEY رایگان دارد (از ربات تلگرام navasan_contact_bot).
-# ۳) تتر: API رسمی و رایگان صرافی نوبیتکس (بدون نیاز به کلید).
-CURRENCY_API_URL = "https://tgju.amirhossein.info/api/price/currency"
+# همه‌چیز از Navasan (navasan.tech) گرفته می‌شود — یک منبع مستقل از tgju که
+# در عمل برای شما همیشه پایدار بوده (برخلاف چند API شخص‌ثالث دیگر که امتحان
+# شد و قطع می‌شدند). نیاز به یک API KEY رایگان دارد (از ربات تلگرام
+# navasan_contact_bot در تلگرام).
 NAVASAN_API_KEY = os.environ.get("NAVASAN_API_KEY", "")
 NAVASAN_API_URL = "http://api.navasan.tech/latest/"
+
+# کدهایی که مقدارشان در Navasan به «هزار تومان» است، نه تومان مستقیم
+# (تشخیص داده‌شده از مقایسه‌ی سکه امامی واقعی با عدد خام API).
+THOUSANDS_SCALE_CODES = {"sekkeh", "bahar", "nim", "rob", "gerami"}
 
 HEADERS = {
     "User-Agent": (
@@ -69,24 +71,22 @@ log = logging.getLogger("tgju-bot")
 
 # ============================ فهرست آیتم‌ها ============================
 
-# هر آیتم: (برچسب فارسی, شناسه در API ارزها, ایموجی/پرچم)
+# هر آیتم: (برچسب فارسی, شناسه در Navasan, ایموجی/پرچم)
 CURRENCY_ITEMS = [
-    ("دلار آمریکا", "price_dollar_rl", "🇺🇸"),
-    ("یورو", "price_eur", "🇪🇺"),
-    ("پوند انگلیس", "price_gbp", "🇬🇧"),
-    ("لیر ترکیه", "price_try", "🇹🇷"),
-    ("دلار استرالیا", "price_aud", "🇦🇺"),
-    ("دلار سنگاپور", "price_sgd", "🇸🇬"),
-    ("دلار کانادا", "price_cad", "🇨🇦"),
-    ("درهم امارات", "price_aed", "🇦🇪"),
-    ("دینار عراق", "price_iqd", "🇮🇶"),
-    ("ریال قطر", "price_qar", "🇶🇦"),
-    ("افغانی", "price_afn", "🇦🇫"),
-    ("یوان چین", "price_cny", "🇨🇳"),
+    ("دلار آمریکا", "usd", "🇺🇸"),
+    ("یورو", "eur", "🇪🇺"),
+    ("پوند انگلیس", "gbp", "🇬🇧"),
+    ("لیر ترکیه", "try", "🇹🇷"),
+    ("دلار استرالیا", "aud", "🇦🇺"),
+    ("دلار سنگاپور", "sgd", "🇸🇬"),
+    ("دلار کانادا", "cad", "🇨🇦"),
+    ("درهم امارات", "aed", "🇦🇪"),
+    ("دینار عراق", "iqd", "🇮🇶"),
+    ("ریال قطر", "qar", "🇶🇦"),
+    ("افغانی", "afn", "🇦🇫"),
+    ("یوان چین", "cny", "🇨🇳"),
 ]
 
-# هر آیتم: (برچسب فارسی, شناسه در Navasan, ایموجی)
-# نکته: Navasan مقادیر را مستقیماً به تومان برمی‌گرداند (نه ریال).
 GOLD_ITEMS = [
     ("طلای ۱۸ عیار (هر گرم)", "18ayar", "🥇"),
     ("انس جهانی طلا", "xau", "🥇"),
@@ -116,51 +116,29 @@ def clean_number(text: str) -> str:
     return text.strip().replace("\u200c", "").replace("\xa0", "")
 
 
-def to_toman(rial_text: str) -> str:
-    digits = rial_text.replace(",", "").strip()
+def format_toman(value, code: str | None = None) -> str:
+    """
+    عدد یا رشته‌ی عددی را با جداکننده‌ی هزارگان به‌صورت رشته برمی‌گرداند.
+    اگر code در THOUSANDS_SCALE_CODES باشد (مثل سکه/نیم/ربع که Navasan آن‌ها
+    را به «هزار تومان» برمی‌گرداند)، قبل از فرمت، در ۱۰۰۰ ضرب می‌شود.
+    """
     try:
-        value = int(float(digits))
-        return f"{value // 10:,}"
-    except ValueError:
-        return rial_text
-
-
-def format_toman(value) -> str:
-    """عدد یا رشته‌ی عددی را با جداکننده‌ی هزارگان به‌صورت رشته برمی‌گرداند."""
-    try:
-        return f"{int(float(str(value).replace(',', ''))):,}"
+        number = float(str(value).replace(",", ""))
+        if code in THOUSANDS_SCALE_CODES:
+            number *= 1000
+        return f"{int(number):,}"
     except (ValueError, TypeError):
         return str(value)
 
 
-def get_currencies_from_api() -> dict:
+def get_navasan_data() -> dict:
     """
-    قیمت ارزها را از یک API شخص‌ثالث پایدار می‌گیرد (نه از اسکرپ مستقیم
-    tgju.org که به‌خاطر سیستم ضدربات سایت، معمولاً جدول اصلی را برنمی‌گرداند).
-    خروجی: دیکشنری slug -> متن قیمت (به ریال، همان‌طور که tgju نمایش می‌دهد).
-    """
-    try:
-        resp = requests.get(CURRENCY_API_URL, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        result = {item["key"]: item["price"] for item in data if item.get("key")}
-        log.info("دریافت قیمت ارزها موفق بود (%s مورد)", len(result))
-        return result
-    except Exception as exc:  # noqa: BLE001
-        log.warning("خطا در دریافت قیمت ارزها: %s", exc)
-        return {}
-
-
-def get_gold_coin_from_navasan() -> dict:
-    """
-    قیمت طلا و سکه را از Navasan (سرویس مستقل و شناخته‌شده‌ی ایرانی، نه tgju)
-    می‌گیرد. Navasan مقادیر را مستقیماً به تومان برمی‌گرداند.
+    قیمت ارز، طلا و سکه را از Navasan (سرویس مستقل ایرانی، نه tgju) می‌گیرد.
     نیازمند NAVASAN_API_KEY (رایگان، از ربات تلگرام navasan_contact_bot).
-    خروجی: دیکشنری code -> متن قیمت (تومان). اگر کلید تنظیم نشده یا درخواست
-    ناموفق باشد، دیکشنری خالی برمی‌گرداند.
+    خروجی: دیکشنری code -> متن قیمت خام (همان‌طور که Navasan برمی‌گرداند).
     """
     if not NAVASAN_API_KEY:
-        log.warning("NAVASAN_API_KEY تنظیم نشده؛ قیمت طلا/سکه در دسترس نیست.")
+        log.warning("NAVASAN_API_KEY تنظیم نشده؛ هیچ قیمتی در دسترس نیست.")
         return {}
     try:
         resp = requests.get(
@@ -169,26 +147,17 @@ def get_gold_coin_from_navasan() -> dict:
         resp.raise_for_status()
         data = resp.json()
         result = {code: info.get("value") for code, info in data.items() if isinstance(info, dict)}
-        log.info("دریافت قیمت طلا/سکه از Navasan موفق بود (%s مورد)", len(result))
+        log.info("دریافت داده از Navasan موفق بود (%s مورد)", len(result))
         return result
     except Exception as exc:  # noqa: BLE001
-        log.warning("خطا در دریافت قیمت طلا/سکه از Navasan: %s", exc)
+        log.warning("خطا در دریافت داده از Navasan: %s", exc)
         return {}
 
 
 def get_tether_from_navasan(navasan_data: dict) -> str | None:
-    """
-    قیمت تتر را از همان داده‌ی Navasan که برای طلا/سکه گرفته‌ایم استخراج می‌کند.
-    (نوبیتکس را کنار گذاشتیم چون از سرورهای خارج ایران—مثل Render—اصلاً در
-    دسترس نیست و همیشه با خطای DNS مواجه می‌شود.)
-    چند نام‌ کد احتمالی را امتحان می‌کنیم چون مستندات Navasan نام دقیق کد
-    تتر را اعلام نکرده.
-    """
-    for candidate in ("usdt", "tether", "usdt_sell", "usdt_buy", "crypto_usdt"):
-        raw = navasan_data.get(candidate)
-        if raw:
-            return format_toman(raw)
-    return None
+    """قیمت تتر را از داده‌ی Navasan استخراج می‌کند (کد تأییدشده: usdt)."""
+    raw = navasan_data.get("usdt")
+    return format_toman(raw) if raw else None
 
 
 def get_iran_datetime_str() -> str:
@@ -209,20 +178,19 @@ def quote(content: str) -> str:
 def build_message() -> str:
     now = get_iran_datetime_str()
 
-    currency_api_data = get_currencies_from_api()
-    navasan_data = get_gold_coin_from_navasan()
+    navasan_data = get_navasan_data()
 
     lines = []
     lines.append("<b>📊 قیمت لحظه‌ای طلا، سکه و ارز</b>")
     lines.append(f"<b>🕒 بروزرسانی: {now}</b>")
     lines.append("")
 
-    unit = "تومان" if SHOW_IN_TOMAN else "ریال"
+    unit = "تومان"  # Navasan همیشه به تومان برمی‌گرداند
 
     lines.append(quote("💵 ارزها"))
-    for label, slug, emoji in CURRENCY_ITEMS:
-        raw_price = currency_api_data.get(slug)
-        price = to_toman(raw_price) if (raw_price and SHOW_IN_TOMAN) else (raw_price or "یافت نشد")
+    for label, code, emoji in CURRENCY_ITEMS:
+        raw_price = navasan_data.get(code)
+        price = format_toman(raw_price, code) if raw_price else "یافت نشد"
         lines.append(quote(f"{emoji} {label}: {price} {unit}"))
 
     tether_toman = get_tether_from_navasan(navasan_data)
@@ -235,14 +203,14 @@ def build_message() -> str:
     lines.append(quote("🥇 طلا"))
     for label, code, emoji in GOLD_ITEMS:
         raw_price = navasan_data.get(code)
-        price = format_toman(raw_price) if raw_price else "یافت نشد"
+        price = format_toman(raw_price, code) if raw_price else "یافت نشد"
         lines.append(quote(f"{emoji} {label}: {price} تومان"))
 
     lines.append("")
     lines.append(quote("🪙 سکه"))
     for label, code, emoji in COIN_ITEMS:
         raw_price = navasan_data.get(code)
-        price = format_toman(raw_price) if raw_price else "یافت نشد"
+        price = format_toman(raw_price, code) if raw_price else "یافت نشد"
         lines.append(quote(f"{emoji} {label}: {price} تومان"))
 
     lines.append("")
@@ -345,26 +313,20 @@ def send_now():
 
 @app.route("/debug")
 def debug():
-    """برای عیب‌یابی سریع: وضعیت هر سه منبع داده را برمی‌گرداند."""
+    """برای عیب‌یابی سریع: وضعیت منبع داده (Navasan) و مقادیر کلیدی را برمی‌گرداند."""
     result = {}
 
     try:
-        api_data = get_currencies_from_api()
-        result["currency_api"] = {"ok": bool(api_data), "item_count": len(api_data)}
-    except Exception as exc:  # noqa: BLE001
-        result["currency_api"] = {"error": str(exc)}
-
-    try:
-        navasan_data = get_gold_coin_from_navasan()
+        navasan_data = get_navasan_data()
         result["navasan"] = {
             "api_key_set": bool(NAVASAN_API_KEY),
             "ok": bool(navasan_data),
             "item_count": len(navasan_data),
         }
-        # کدهای موجود که شامل usd/tether/usdt هستند، برای پیدا کردن نام دقیق کد تتر
-        result["navasan_usdt_like_keys"] = [
-            k for k in navasan_data.keys() if "usd" in k.lower() or "tether" in k.lower()
-        ]
+        result["sample_values"] = {
+            code: navasan_data.get(code)
+            for code in ["usd", "eur", "iqd", "qar", "usdt", "18ayar", "sekkeh", "nim", "rob"]
+        }
         tether = get_tether_from_navasan(navasan_data)
         result["tether"] = {"ok": bool(tether), "value": tether}
     except Exception as exc:  # noqa: BLE001
@@ -376,3 +338,4 @@ def debug():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "10000"))
     app.run(host="0.0.0.0", port=port)
+ 
